@@ -1,0 +1,8 @@
+*.class
+*.jar
+bin/
+out/
+.vscode/
+.idea/
+*.txt
+!README.md

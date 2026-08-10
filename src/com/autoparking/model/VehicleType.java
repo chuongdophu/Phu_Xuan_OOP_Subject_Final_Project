@@ -1,19 +1,19 @@
 package com.autoparking.model;
 
 public enum VehicleType {
-    CAR("Car"),
-    MOTORBIKE("Motorbike"),
-    TRUCK("Truck"),
-    EV("Electric Vehicle"),
-    BUS("Bus Passenger");
+    MOTORBIKE(1.0),
+    CAR(2.0),
+    TRUCK(3.0),
+    EV(1.5),
+    BUS(4.0);
 
-    private final String description;
+    private final double multiplier;
 
-    VehicleType(String description) {
-        this.description = description;
+    VehicleType(double multiplier) {
+        this.multiplier = multiplier;
     }
 
-    public String getDescription() {
-        return description;
+    public double getMultiplier() {
+        return multiplier;
     }
 }

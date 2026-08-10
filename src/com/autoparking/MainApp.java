@@ -1,9 +1,11 @@
 package com.autoparking;
 
-import com.autoparking.config.ParkingConfig;
-import com.autoparking.model.Ticket;
-import com.autoparking.model.VehicleType;
-import com.autoparking.service.ParkingManager;
+import com.autoparking.core.interfaces.*;
+import com.autoparking.factory.*;
+import com.autoparking.model.*;
+import com.autoparking.service.ParkingManagerService;
+import com.autoparking.service.impl.*;
+import com.autoparking.ui.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -12,65 +14,136 @@ import java.util.Scanner;
 public class MainApp {
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
-        List<Ticket> activeTickets = new ArrayList<>();
-        List<Ticket> historicalTickets = new ArrayList<>();
 
-        // 1. Load Cau hinh & Thong tin xe tu config.txt
-        ParkingConfig config = ParkingConfig.loadOrCreateConfig(scanner, activeTickets, historicalTickets);
-        ParkingManager manager = new ParkingManager(config, activeTickets, historicalTickets);
+        IExcelTableBuilder tableBuilder = new ExcelTableBuilderImpl();
+        tableBuilder.initializeExcelFiles();
+
+        ITimeProvider timeProvider = new RealTimeProviderImpl();
+        ITicketFactory ticketFactory = new TicketFactoryImpl(timeProvider);
+        ITicketValidator ticketValidator = new TicketValidatorImpl();
+        IHistoryManager historyManager = new ExcelHistoryManagerImpl();
+        IReportExporter reportExporter = new ExcelReportExporterImpl(historyManager);
+        UserProfileProviderImpl profileProvider = new UserProfileProviderImpl();
+
+        // 1. Quét kiểm tra Enterprise Name / User Data trước khi Onboarding
+        UserProfile profile = UserProfileFactory.checkOrRunOnboarding(scanner, profileProvider);
+
+        // 2. Pass profile vào Calculator
+        IPricingCalculator pricingCalculator = new FlexiblePricingCalculatorImpl(profile);
+
+        ParkingManagerService parkingService = new ParkingManagerService(
+                profile, ticketFactory, ticketValidator, pricingCalculator, timeProvider, historyManager,
+                profileProvider);
 
         boolean running = true;
         while (running) {
-            System.out.println("\n========== AUTOMATED PARKING SYSTEM ==========");
-            System.out.println("1. Check-In Vehicle (Gui xe)");
-            System.out.println("2. Check-Out Vehicle (Lay xe)");
-            System.out.println("3. Display Parking Status (Trang thai bai)");
-            System.out.println("4. Display Active Vehicles (Xe dang do)");
-            System.out.println("5. Sync Data to config.txt (Luu du lieu)");
-            System.out.println("0. Exit (Thoat)");
-            System.out.print("Choose option [0-5]: ");
+            // Lấy profile mới nhất từ service để UI hiển thị đúng cấu hình
+            profile = parkingService.getProfile();
+            ClientViewMapper.renderMenu(profile);
+            String input = scanner.nextLine().trim();
 
-            String choice = scanner.nextLine().trim();
-            switch (choice) {
-                case "1" -> {
+            switch (input) {
+                case "1":
                     System.out.print("Enter License Plate: ");
                     String plate = scanner.nextLine().trim();
-                    if (plate.isEmpty()) {
-                        System.out.println("[LOI] Bien so xe khong duoc de trong!");
-                        break;
-                    }
+
+                    List<VehicleType> activeTypes = new ArrayList<>(profile.getSupportedVehicles());
                     System.out.println("Select Vehicle Type:");
-                    System.out.println(" 1. CAR");
-                    System.out.println(" 2. MOTORBIKE");
-                    System.out.println(" 3. ELECTRIC VEHICLE (EV)");
-                    System.out.println(" 4. TRUCK");
-                    System.out.println(" 5. BUS");
-                    System.out.print("Choice: ");
-                    String tChoice = scanner.nextLine().trim();
-                    VehicleType type = switch (tChoice) {
-                        case "2" -> VehicleType.MOTORBIKE;
-                        case "3" -> VehicleType.EV;
-                        case "4" -> VehicleType.TRUCK;
-                        case "5" -> VehicleType.BUS;
-                        default -> VehicleType.CAR;
-                    };
-                    manager.processCheckIn(plate, type);
-                }
-                case "2" -> {
-                    System.out.print("Enter Ticket ID or License Plate to Checkout: ");
-                    String query = scanner.nextLine().trim();
-                    if (!query.isEmpty()) {
-                        manager.processCheckOut(query);
+                    for (int i = 0; i < activeTypes.size(); i++) {
+                        System.out.println((i + 1) + ". " + activeTypes.get(i).name());
                     }
-                }
-                case "3" -> manager.displayParkingStatus();
-                case "4" -> manager.displayActiveVehicles();
-                case "5" -> manager.exportReport();
-                case "0" -> {
+                    System.out.print("Choice: ");
+                    int typeChoice = 1;
+                    try {
+                        typeChoice = Integer.parseInt(scanner.nextLine().trim());
+                    } catch (Exception ignored) {
+                    }
+
+                    VehicleType selectedType = (typeChoice >= 1 && typeChoice <= activeTypes.size())
+                            ? activeTypes.get(typeChoice - 1)
+                            : activeTypes.get(0);
+
+                    Ticket newTicket = parkingService.checkIn(plate, selectedType);
+                    if (newTicket != null) {
+                        TicketConsolePrinter.printCheckInTicket(newTicket);
+                    }
+                    break;
+
+                case "2":
+                    System.out.print("Enter Ticket ID to Check-out: ");
+                    String ticketId = scanner.nextLine().trim();
+                    Ticket completedTicket = parkingService.checkOut(ticketId);
+                    if (completedTicket != null) {
+                        TicketConsolePrinter.printCheckOutReceipt(completedTicket);
+                    }
+                    break;
+
+                case "3":
+                    System.out.println("\n=== ACTIVE TICKETS MATRIX OUTPUT ===");
+                    System.out.println("1. View current active tickets on console");
+                    System.out.println("2. Export current active tickets as CSV");
+                    System.out.print("Choose: ");
+                    String matrixChoice = scanner.nextLine().trim();
+
+                    if ("1".equals(matrixChoice)) {
+                        parkingService.displayMatrix();
+                        reportExporter.printActiveTickets();
+                    } else if ("2".equals(matrixChoice)) {
+                        reportExporter.exportActiveTicketsCsv();
+                    } else {
+                        System.out.println("\n[ERROR] Invalid Option!");
+                    }
+                    break;
+
+                case "4":
+                    if (profile.isLargeScale()) {
+                        System.out.println("\n=== HISTORY REPORT EXPORT ===");
+                        System.out.println("1. View history on console");
+                        System.out.println("2. Export history to CSV file");
+                        System.out.print("Choose: ");
+                        String reportChoice = scanner.nextLine().trim();
+
+                        if ("1".equals(reportChoice)) {
+                            reportExporter.printHistory();
+                        } else if ("2".equals(reportChoice)) {
+                            reportExporter.exportHistoryCsv();
+                        } else {
+                            reportExporter.exportReport();
+                        }
+                    } else {
+                        System.out.println("\n[ERROR] Invalid Option!");
+                    }
+                    break;
+
+                case "5":
+                    if (profile.isLargeScale()) {
+                        System.out.println("\n[INFO] Zone Rules Active:");
+                        profile.getVehicleZones().forEach((type, floors) -> System.out
+                                .println(" - " + type.name() + " -> Allowed Floors: " + floors));
+                    } else {
+                        System.out.println("\n[ERROR] Invalid Option!");
+                    }
+                    break;
+
+                case "6":
+                    // Chức năng CẬP NHẬT CẤU HÌNH BÃI XE
+                    System.out.println("\n=== CAP NHAT CAU HINH BAI XE ===");
+                    UserProfile currentProfile = parkingService.getProfile();
+                    UserProfile updatedProfile = UserProfileFactory.updateExistingProfile(scanner, currentProfile,
+                            profileProvider);
+                    if (updatedProfile != null) {
+                        parkingService.updateSystemSetup(updatedProfile);
+                    }
+                    break;
+
+                case "0":
                     running = false;
-                    System.out.println("\n[SYSTEM] Cam on ban da su dung phan mem. Tam biet!");
-                }
-                default -> System.out.println("[LOI] Lua chon khong hop le!");
+                    System.out.println("\nExiting System. Goodbye!");
+                    break;
+
+                default:
+                    System.out.println("\n[ERROR] Invalid Option!");
+                    break;
             }
         }
         scanner.close();
