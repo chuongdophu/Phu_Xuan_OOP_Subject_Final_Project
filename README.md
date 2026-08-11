@@ -3,8 +3,11 @@
 Danh sách thành viên nhóm:
 
 Chương Do Phú: NBS2503ITA0032
+
 Lê Kiều Khánh Linh: NBS2503ITA0038
+
 Phan Thanh Tâm: NBS2603ITA0013
+
 Lê Bá Nghi Truyền: NBS2503ITA0055
 
 ## 1. Yêu cầu trước khi chạy
